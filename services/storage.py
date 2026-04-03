@@ -69,6 +69,7 @@ class ExpenseRepository:
         with self._connect() as conn:
             rows = conn.execute("SELECT * FROM expenses ORDER BY id DESC").fetchall()
         return [dict(r) for r in rows]
+    
 
     def clear_all(self):
         with self._connect() as conn:
@@ -101,8 +102,8 @@ class AzureBlobStorageAdapter:
 
         try:
             self.container.create_container()
-        except:
-            pass
+        except Exception as e:
+            print("Azure container creation error:", e)
 
     def save(self, file_bytes: bytes, filename: str) -> str:
         import uuid

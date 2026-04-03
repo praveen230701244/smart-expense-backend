@@ -44,10 +44,11 @@ def parse_pdf_bytes(file_bytes: bytes) -> List[Dict[str, Any]]:
         if amount <= 0 or amount > 50000:
             continue
 
+        vendor = line.split()[0] if line else "Unknown"
         expenses.append({
             "amount": amount,
             "date": datetime.utcnow().strftime("%Y-%m-%d"),
-            "vendor": line,
+            "vendor": vendor,
             "category": None
         })
 

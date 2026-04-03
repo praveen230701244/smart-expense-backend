@@ -125,7 +125,7 @@ def _categorize_and_build_expenses(raw_expenses, source, upload_url=None):
     categorizer: AutoCategorizer = current_app.extensions["categorizer"]
     repo = current_app.extensions["repo"]
 
-    historical = repo.list_expenses(limit=5000)
+    historical = repo.list_expenses()
     built = []
 
     for e in raw_expenses:
@@ -197,11 +197,15 @@ def upload_csv():
     if file_storage:
         try:
             upload_url = file_storage.save(file_bytes, f.filename)
-        except:
-            pass
+        except Exception as e:
+            print("File upload error:", e)
 
     expenses = _categorize_and_build_expenses(raw_expenses, "csv", upload_url)
     inserted = repo.add_expenses(expenses)
+    print("📥 RAW:", raw_expenses)
+    print("📊 FINAL:", inserted)
+    print("💾 INSERTED:", inserted)
+    
 
     return jsonify({"status": "ok", "inserted": inserted})
 
@@ -236,11 +240,15 @@ def upload_pdf():
     if file_storage:
         try:
             upload_url = file_storage.save(file_bytes, f.filename)
-        except:
-            pass
+        except Exception as e:
+            print("File upload error:", e)
 
     expenses = _categorize_and_build_expenses(raw_expenses, "pdf", upload_url)
     inserted = repo.add_expenses(expenses)
+
+    print("📥 RAW:", raw_expenses)
+    print("📊 FINAL:", expenses)
+    print("💾 INSERTED:", inserted)
 
     return jsonify({"status": "ok", "inserted": inserted})
 
@@ -262,5 +270,9 @@ def upload_manual():
 
     expenses = _categorize_and_build_expenses(raw, "manual")
     inserted = repo.add_expenses(expenses)
+
+    print("📥 RAW:", raw_expenses)
+    print("📊 FINAL:", expenses)
+    print("💾 INSERTED:", inserted)
 
     return jsonify({"status": "ok", "inserted": inserted})
