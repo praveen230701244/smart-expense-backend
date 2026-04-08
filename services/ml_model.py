@@ -5,6 +5,7 @@ import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
 
+from services.vendor_normalizer import normalize_vendor
 
 DEFAULT_CATEGORY_RULES = {
     "Electronics": ["mouse", "keyboard", "usb", "laptop", "charger", "cable", "electronics"],
@@ -21,7 +22,9 @@ DEFAULT_CATEGORY_RULES = {
 def _normalize_text(s: Optional[str]) -> str:
     if not s:
         return ""
-    return " ".join(str(s).lower().split())
+    # Normalize merchants so the model learns/predicts on canonical forms.
+    v = normalize_vendor(str(s))
+    return " ".join(str(v).lower().split())
 
 
 @dataclass

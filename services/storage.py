@@ -26,6 +26,12 @@ class ExpenseRepository:
         conn = sqlite3.connect(str(self.db_path))
         conn.row_factory = sqlite3.Row
         return conn
+    
+
+    def count(self) -> int:
+        with self._connect() as conn:
+            result = conn.execute("SELECT COUNT(*) FROM expenses").fetchone()
+            return int(result[0]) if result else 0
 
     def _init_db(self):
         with self._connect() as conn:
@@ -65,9 +71,12 @@ class ExpenseRepository:
                     continue
         return inserted
 
-    def list_expenses(self):
+    def list_expenses(self, limit: int = 5000):
         with self._connect() as conn:
-            rows = conn.execute("SELECT * FROM expenses ORDER BY id DESC").fetchall()
+            rows = conn.execute(
+                "SELECT * FROM expenses ORDER BY id DESC LIMIT ?",
+                (limit,)
+            ).fetchall()
         return [dict(r) for r in rows]
     
 

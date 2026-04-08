@@ -1,6 +1,6 @@
 import os
 from pathlib import Path
-
+from flask import current_app
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -65,7 +65,11 @@ def create_app() -> Flask:
 
     @app.route("/health", methods=["GET"])
     def health():
-        return jsonify({"status": "ok", "expenseCount": repo.count()})
+        repo = current_app.extensions["repo"]
+        return jsonify({
+            "status": "ok",
+            "expenseCount": repo.count()
+        })
     @app.route("/reset", methods=["DELETE"])
     def reset():
         repo = current_app.extensions["repo"]

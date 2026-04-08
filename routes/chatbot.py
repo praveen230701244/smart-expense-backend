@@ -9,6 +9,7 @@ from services.insights_service import (
     monthly_trend,
     risk_score,
     savings_suggestions,
+    spending_behavior,
 )
 from services.prediction_service import forecast_next_month
 
@@ -16,12 +17,21 @@ chatbot_bp = Blueprint("chatbot", __name__)
 
 
 SYSTEM_PROMPT = (
-    "You are a smart financial advisor.\n"
-    "Analyze the user's expenses and provide:\n\n"
-    "1. Overspending categories\n"
-    "2. Practical saving tips\n"
-    "3. Budget suggestions\n"
-    "   Keep the response simple and actionable."
+    "You are a senior AI financial advisor.\n"
+    "You help users understand spending patterns and make realistic, personalized changes.\n"
+    "\n"
+    "Behavioral rules:\n"
+    "- Be specific with numbers (percentages, monthly impact) and name merchants when helpful.\n"
+    "- Prefer small, high-leverage actions (e.g., reduce Swiggy by 2 orders/week) with estimated savings.\n"
+    "- If the user asks a direct question, answer it first, then add advice.\n"
+    "- If data is insufficient, say what’s missing and give a safe next step.\n"
+    "- Avoid moralizing; be supportive and practical.\n"
+    "\n"
+    "Reasoning (do not reveal):\n"
+    "1) Identify relevant signals from the provided insights\n"
+    "2) Quantify the pattern (share, trend, change)\n"
+    "3) Recommend 2-4 concrete actions with estimated savings\n"
+    "4) Provide a short follow-up question for personalization"
 )
 
 def _compute_insights(expenses: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -34,6 +44,7 @@ def _compute_insights(expenses: List[Dict[str, Any]]) -> Dict[str, Any]:
     suggestions = savings_suggestions(expenses, growth, risk)
     prediction = forecast_next_month(expenses)
     total = round(sum(float(e.get("amount") or 0.0) for e in expenses), 2)
+    behavior = spending_behavior(expenses)
     return {
         "totalExpenses": total,
         "categoryTotals": categories,
@@ -44,6 +55,7 @@ def _compute_insights(expenses: List[Dict[str, Any]]) -> Dict[str, Any]:
         "riskScore": risk,
         "savingsSuggestions": suggestions,
         "prediction": prediction,
+        "behavior": behavior,
     }
 
 
@@ -139,24 +151,31 @@ def chat():
             suggestions = insights.get("savingsSuggestions") or []
             prediction = insights.get("prediction") or {}
             prediction_ci = prediction.get("confidenceInterval") or {}
+            behavior = insights.get("behavior") or {}
 
             user_prompt = (
                 f"User question: {message}\n\n"
-                f"Use the following structured financial insights and respond with actionable guidance.\n"
+                f"Use the following structured financial insights and respond like a real financial advisor.\n"
                 f"- Total expenses: {sum(float(e.get('amount') or 0.0) for e in expenses):.2f}\n"
                 f"- Overspending categories:\n{overspending_str or '- None'}\n"
                 f"- Monthly totals:\n{monthly_str or '- N/A'}\n"
                 f"- Growth trends: {growth}\n"
                 f"- Risk score: {risk}/100\n"
+                f"- Budget health: {behavior.get('budgetHealth')}\n"
+                f"- Weekend vs weekday spend: weekend={behavior.get('weekendSpendPct')}%, weekday={behavior.get('weekdaySpendPct')}%\n"
+                f"- Impulsive spending score (0-100): {behavior.get('impulsiveSpendingScore')}\n"
+                f"- Lifestyle signals: {behavior.get('lifestyleSignals')}\n"
+                f"- Subscription candidates: {behavior.get('subscriptionCandidates')}\n"
                 f"- Anomaly count: {len(anomalies)}\n"
                 f"- Savings suggestions: {suggestions}\n"
                 f"- Prediction: month={prediction.get('nextMonth')}, total={prediction.get('predictedTotal')}, "
                 f"interval=({prediction_ci.get('lower')} to {prediction_ci.get('upper')})\n\n"
-                f"Output format:\n"
-                f"1) Overspending categories\n"
-                f"2) Practical saving tips\n"
-                f"3) Budget suggestions\n"
-                f"Keep it simple, concise, and actionable."
+                f"Output:\n"
+                f"- Start with a 1-2 sentence direct answer to the user’s question.\n"
+                f"- Then give 3-6 bullet points with quantified insights and actionable recommendations.\n"
+                f"- Where possible, include one concrete saving estimate (₹/$ per month) based on the data.\n"
+                f"- End with one short follow-up question to personalize the plan.\n"
+                f"Style: human, confident, practical. No generic fluff."
             )
 
             advice = openai_service.generate_advice(SYSTEM_PROMPT, user_prompt)
