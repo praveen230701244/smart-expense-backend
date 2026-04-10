@@ -357,3 +357,25 @@ def parse_pdf_bytes(file_bytes: bytes) -> List[Dict[str, Any]]:
         print("⚠️ No items extracted from PDF")
 
     return final
+
+
+def parse_plaintext_transactions(text: str) -> List[Dict[str, Any]]:
+    """OCR / pasted receipt text → same shape as PDF parse."""
+    lines = [l.strip() for l in (text or "").splitlines() if l.strip()]
+    txns = _extract_transactions(lines)
+    seen = set()
+    final: List[Dict[str, Any]] = []
+    for t in txns:
+        key = (round(t.amount, 2), t.date, t.vendor)
+        if key in seen:
+            continue
+        seen.add(key)
+        final.append(
+            {
+                "amount": float(t.amount),
+                "date": t.date,
+                "vendor": t.vendor,
+                "category": None,
+            }
+        )
+    return final

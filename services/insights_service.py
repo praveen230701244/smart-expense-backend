@@ -53,7 +53,9 @@ def growth_trends(expenses: List[Dict[str, Any]]) -> Dict[str, Any]:
     curr_cat: Dict[str, float] = defaultdict(float)
     for e in expenses:
         month = str(e.get("date") or "")[:7]
-        cat = str(e.get("category") or "Uncategorized")
+        cat = str(e.get("category") or "Others")
+        if cat.strip().lower() == "uncategorized":
+            cat = "Others"
         amt = float(e.get("amount") or 0.0)
         if month == prev_month:
             prev_cat[cat] += amt

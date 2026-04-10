@@ -4,6 +4,15 @@ from typing import Optional
 import requests
 
 
+
+
+
+
+
+
+
+
+
 class GeminiService:
     """
     Gemini API wrapper for chatbot advice generation.
@@ -12,9 +21,9 @@ class GeminiService:
 
     def __init__(self) -> None:
         self.api_key = os.getenv("GEMINI_API_KEY", "").strip()
+        model = os.getenv("GEMINI_MODEL", "gemini-1.5-flash").strip()
         self.base_url = (
-            "https://generativelanguage.googleapis.com/v1beta/models/"
-            "gemini-pro:generateContent"
+            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
         )
         self.url = f"{self.base_url}?key={self.api_key}" if self.api_key else ""
 
@@ -35,7 +44,7 @@ class GeminiService:
         }
 
         try:
-            response = requests.post(self.url, json=payload, timeout=20)
+            response = requests.post(self.url, json=payload, timeout=45)
             if response.status_code >= 400:
                 return None
             data = response.json()

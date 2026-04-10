@@ -114,6 +114,10 @@ class AutoCategorizer:
         except Exception:
             return None
 
+    def reset_model(self) -> None:
+        self._vectorizer = None
+        self._classifier = None
+
     def categorize(
         self,
         amount: float,

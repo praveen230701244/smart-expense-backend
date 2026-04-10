@@ -4,6 +4,8 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 from statsmodels.tsa.arima.model import ARIMA
 
+from services.cache_utils import bounded_cache_get
+
 
 def monthly_totals(expenses: List[Dict[str, Any]]) -> List[Tuple[str, float]]:
     """
@@ -80,4 +82,25 @@ def forecast_next_month(expenses: List[Dict[str, Any]], months_ahead: int = 1) -
         },
         "model": "linear-fallback",
     }
+
+
+def forecast_next_month_cached(
+    expenses: List[Dict[str, Any]],
+    months_ahead: int,
+    cache_store: Dict[Any, Any],
+    cache_order: List[Any],
+    max_entries: int = 64,
+) -> Optional[Dict[str, Any]]:
+    """
+    Same as forecast_next_month but memoized on the observed monthly series.
+    """
+    mt = monthly_totals(expenses)
+    if len(mt) < 3:
+        return None
+    key = (tuple(mt), int(months_ahead))
+
+    def _factory() -> Optional[Dict[str, Any]]:
+        return forecast_next_month(expenses, months_ahead=months_ahead)
+
+    return bounded_cache_get(cache_store, cache_order, key, _factory, max_entries=max_entries)
 

@@ -1,0 +1,5 @@
+# Optional: MiniLM embeddings (CPU). Large download on first run.
+# Render: set USE_MINILM=true only if you provision enough disk/RAM.
+# Install: pip install -r requirements.txt -r requirements-ml.txt
+sentence-transformers>=3.0.0
+torch>=2.2.0
