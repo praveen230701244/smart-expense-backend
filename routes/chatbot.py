@@ -1,8 +1,10 @@
+import os
 from typing import Any, Dict, List
 
 from flask import Blueprint, current_app, g, jsonify, request
 
 from services.anomaly_service import detect_anomalies
+from services.context_builder import ADVISOR_SYSTEM_STRICT, build_context, format_chat_user_prompt
 from services.insights_extended import mom_growth_headline
 from services.insights_service import (
     category_breakdown,
@@ -16,17 +18,23 @@ from services.prediction_service import forecast_next_month
 
 chatbot_bp = Blueprint("chatbot", __name__)
 
-SYSTEM_PROMPT = (
-    "You are a smart financial advisor.\n"
-    "Always respond to ANY message.\n"
-    "Use the user's expense data and goals below.\n"
-    "Give exactly:\n"
-    "- 2–4 short lines\n"
-    "- include ₹ amounts and % where relevant\n"
-    "- 1 concrete actionable tip\n"
-    "- conversational, warm tone\n"
-    "If the user says hi/hello, greet and suggest one useful question."
-)
+_GREETINGS = frozenset({"hi", "hello", "hey", "hii", "hola", "yo", "sup", "greetings"})
+
+
+def _is_greeting(message: str) -> bool:
+    t = (message or "").lower().strip()
+    if not t:
+        return False
+    t = t.rstrip("!.?,")
+    if t in _GREETINGS:
+        return True
+    words = t.split()
+    if not words:
+        return False
+    # "hi there", "hello friend" — short greeting-style openers
+    if words[0] in _GREETINGS and len(words) <= 4:
+        return True
+    return False
 
 
 def _compute_insights(expenses: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -96,91 +104,79 @@ def chat():
     if not message:
         return jsonify({"error": "Missing `message` in request body."}), 400
 
-    msg_low = message.lower().strip()
-    if msg_low in {"hi", "hello", "hey", "hii", "hola"}:
-        return jsonify(
-            {
-                "advice": "Hey! I’m your AI Financial Co-Pilot.\n"
-                "I can tell you where money leaks and how much you could save.\n"
-                "Try: “Where am I overspending?” or “Help me save ₹5000/month.”"
-            }
-        )
-
     expenses = repo.list_expenses(user_id, limit=5000)
     goals = repo.list_goals(user_id)
 
-    if not expenses:
-        advice = (
-            "I don’t see any expenses yet—upload a CSV/PDF (or a receipt photo) "
-            "and I’ll build your personalized plan."
-        )
-        repo.append_chat(user_id, "user", message)
-        repo.append_chat(user_id, "assistant", advice)
-        return jsonify({"advice": advice})
-
+    contamination = float(current_app.config.get("ANOMALY_CONTAMINATION", 0.08))
+    context = build_context(user_id, repo, contamination=contamination)
     insights = _compute_insights(expenses)
 
     history = repo.recent_chat(user_id, limit=10)
     history_text = "\n".join(f"{m['role']}: {m['content'][:300]}" for m in history)
 
+    user_prompt = format_chat_user_prompt(context, message, history_text)
+    if _is_greeting(message):
+        user_prompt = (
+            "User greeted you. Respond briefly and warmly, then offer one way you can help with their money.\n\n"
+            + user_prompt
+        )
+
     repo.append_chat(user_id, "user", message)
 
-    try:
-        openai_service = current_app.extensions.get("openai_service")
-        if openai_service:
-            overspending_str = "\n".join(
-                [
-                    f"- {i['category']} (total: {i['total']})"
-                    for i in (insights.get("overspendingCategories") or [])
-                ]
-            )
-            monthly_str = "\n".join(
-                [f"- {m['month']}: {m['total']}" for m in (insights.get("monthlyTrend") or [])][-12:]
-            )
-            growth = insights.get("growthTrends") or {}
-            risk = insights.get("riskScore")
-            anomalies = insights.get("anomalies") or []
-            suggestions = insights.get("savingsSuggestions") or []
-            prediction = insights.get("prediction") or {}
-            prediction_ci = prediction.get("confidenceInterval") or {}
-            behavior = insights.get("behavior") or {}
-            goals_str = "\n".join(
-                f"- Save ₹{g.get('target_monthly_save') or g.get('targetMonthlySave')}/mo: {g.get('title') or 'Goal'}"
-                for g in goals
-            )
+    ai_service = current_app.extensions.get("ai_service") or current_app.extensions.get("openai_service")
+    debug: Dict[str, Any] = {}
 
-            user_prompt = (
-                f"Recent chat:\n{history_text or '(none)'}\n\n"
-                f"User message: {message}\n\n"
-                f"Data:\n"
-                f"- Total expenses: ₹{sum(float(e.get('amount') or 0.0) for e in expenses):.2f}\n"
-                f"- Top categories:\n{overspending_str or '- N/A'}\n"
-                f"- Monthly totals:\n{monthly_str or '- N/A'}\n"
-                f"- Growth: {growth}\n"
-                f"- Risk: {risk}/100\n"
-                f"- Budget health: {behavior.get('budgetHealth')}\n"
-                f"- Weekend/weekday %: {behavior.get('weekendSpendPct')}/{behavior.get('weekdaySpendPct')}\n"
-                f"- Subscriptions guess: {behavior.get('subscriptionCandidates')[:3]}\n"
-                f"- MoM headline: {insights.get('momHeadline')}\n"
-                f"- Anomalies: {len(anomalies)}\n"
-                f"- Savings ideas: {suggestions[:3]}\n"
-                f"- Forecast: {prediction.get('predictedTotal')} (range {prediction_ci.get('lower')}-{prediction_ci.get('upper')})\n"
-                f"- Goals:\n{goals_str or '- None set'}\n"
-            )
-
-            advice = openai_service.generate_advice(SYSTEM_PROMPT, user_prompt)
-            if advice and str(advice).strip():
-                advice = str(advice).strip()
+    if ai_service:
+        try:
+            print("Chat: calling Gemini…")
+            raw = ai_service.generate_advice(ADVISOR_SYSTEM_STRICT, user_prompt, timeout=45.0)
+            if raw and str(raw).strip():
+                advice = str(raw).strip()
                 repo.append_chat(user_id, "assistant", advice)
-                return jsonify({"advice": advice})
-    except Exception:
-        pass
+                return jsonify(
+                    {
+                        "advice": advice,
+                        "source": "gemini",
+                        "debug": {**debug, "result": "gemini_ok"},
+                    }
+                )
+            print("⚠ Gemini failed → fallback triggered (empty or invalid response)")
+            debug["reason"] = "empty_response"
+        except Exception as e:
+            print("Chat: Gemini error:", repr(e))
+            print("⚠ Gemini failed → fallback triggered (exception)")
+            debug["error"] = repr(e)
+    else:
+        print("Chat: ai_service extension missing — fallback")
+        print("⚠ Gemini failed → fallback triggered (no ai_service)")
+        debug["reason"] = "no_ai_service"
+
+    if os.getenv("GEMINI_DEBUG_NO_FALLBACK", "").lower().strip() in ("1", "true", "yes"):
+        print("GEMINI_DEBUG_NO_FALLBACK: returning error instead of fallback")
+        return (
+            jsonify(
+                {
+                    "error": "Gemini not responding",
+                    "advice": None,
+                    "source": "error",
+                    "debug": debug,
+                }
+            ),
+            503,
+        )
 
     advice = _format_fallback_advice(message, insights, goals).strip()
     if not advice:
         advice = (
-            "I’m having trouble reaching the AI model right now—try again in a moment. "
-            "Your data is saved and I’ll analyze it on the next request."
+            "I'm having trouble reaching the AI model right now—try again in a moment. "
+            "Your data is saved and I'll analyze it on the next request."
         )
+    print("Chat: returning rule-based fallback")
     repo.append_chat(user_id, "assistant", advice)
-    return jsonify({"advice": advice})
+    return jsonify(
+        {
+            "advice": advice,
+            "source": "fallback",
+            "debug": {**debug, "result": "fallback_rules"},
+        }
+    )

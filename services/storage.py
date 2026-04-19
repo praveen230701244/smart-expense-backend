@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
+from models.user_profile import UserProfile
+
 
 @dataclass(frozen=True)
 class Expense:
@@ -80,6 +82,25 @@ class ExpenseRepository:
             """
             CREATE INDEX IF NOT EXISTS idx_chat_user ON chat_messages(user_id, id DESC)
             """
+        )
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_profile (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL UNIQUE,
+                income REAL NOT NULL DEFAULT 0,
+                fixed_expenses REAL NOT NULL DEFAULT 0,
+                goals TEXT NOT NULL DEFAULT '',
+                risk_level TEXT NOT NULL DEFAULT 'medium',
+                lifestyle TEXT NOT NULL DEFAULT '',
+                savings_goal REAL NOT NULL DEFAULT 0,
+                currency TEXT NOT NULL DEFAULT 'INR'
+            )
+            """
+        )
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_user_profile_user ON user_profile(user_id)"
         )
 
     def _init_db(self):
@@ -195,6 +216,52 @@ class ExpenseRepository:
             conn.execute("DELETE FROM chat_messages WHERE user_id = ?", (user_id,))
             conn.execute("DELETE FROM financial_goals WHERE user_id = ?", (user_id,))
             conn.execute("DELETE FROM category_feedback WHERE user_id = ?", (user_id,))
+
+    def get_user_profile(self, user_id: str) -> Optional[Dict[str, Any]]:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT id, user_id, income, fixed_expenses, goals, risk_level, lifestyle,
+                       savings_goal, currency
+                FROM user_profile WHERE user_id = ?
+                """,
+                (user_id,),
+            ).fetchone()
+        if not row:
+            return None
+        p = UserProfile.from_row(dict(row))
+        return p.to_dict()
+
+    def upsert_user_profile(self, profile: UserProfile) -> Dict[str, Any]:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO user_profile (
+                    user_id, income, fixed_expenses, goals, risk_level, lifestyle,
+                    savings_goal, currency
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET
+                    income = excluded.income,
+                    fixed_expenses = excluded.fixed_expenses,
+                    goals = excluded.goals,
+                    risk_level = excluded.risk_level,
+                    lifestyle = excluded.lifestyle,
+                    savings_goal = excluded.savings_goal,
+                    currency = excluded.currency
+                """,
+                (
+                    profile.user_id,
+                    float(profile.income or 0.0),
+                    float(profile.fixed_expenses or 0.0),
+                    str(profile.goals or ""),
+                    str(profile.risk_level or "medium"),
+                    str(profile.lifestyle or ""),
+                    float(profile.savings_goal or 0.0),
+                    str(profile.currency or "INR"),
+                ),
+            )
+        stored = self.get_user_profile(profile.user_id)
+        return stored or profile.to_dict()
 
     def get_feedback_category(self, user_id: str, vendor_norm: str) -> Optional[str]:
         vn = (vendor_norm or "").strip().lower()

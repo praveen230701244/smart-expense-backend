@@ -1,9 +1,40 @@
+import importlib.util
 import os
+import pkgutil
 from pathlib import Path
 
 from dotenv import load_dotenv
 
 load_dotenv()
+
+_backend_dir = Path(__file__).resolve().parent
+load_dotenv(_backend_dir / ".env")
+load_dotenv(_backend_dir.parent / ".env")
+load_dotenv()
+
+print("Loaded GEMINI KEY:", os.getenv("GEMINI_API_KEY"))
+
+try:
+    _genai_installed = pkgutil.find_loader("google.genai") is not None
+except AttributeError:
+    # Python 3.12+: find_loader removed; use importlib
+    _genai_installed = importlib.util.find_spec("google.genai") is not None
+print("google.genai installed:", _genai_installed)
+
+try:
+    import certifi
+
+    print("certifi.where():", certifi.where())
+except ImportError:
+    print("certifi: not installed (pip install certifi)")
+
+try:
+    import requests
+
+    _probe = requests.get("https://generativelanguage.googleapis.com", timeout=30)
+    print("Testing Google access:", _probe.status_code)
+except Exception as _net_e:
+    print("Testing Google access failed:", repr(_net_e))
 
 from flask import Flask, current_app, jsonify
 from flask_cors import CORS
@@ -11,6 +42,7 @@ from flask_cors import CORS
 from routes.analysis import analysis_bp
 from routes.chatbot import chatbot_bp
 from routes.copilot import copilot_bp
+from routes.profile import profile_bp
 from routes.upload import upload_bp
 from services.auth_firebase import register_auth_context
 from services.embedding_categorizer import MiniLMCategorizer
@@ -20,7 +52,7 @@ from services.storage import AzureBlobStorageAdapter, ExpenseRepository, LocalSt
 
 
 def _build_categorizer():
-    # Default: MiniLM (all-MiniLM-L6-v2). Set USE_MINILM=false for lightweight Render tiers.
+    # Default: MiniLMCategorizer (all-MiniLM-L6-v2). Set USE_MINILM=false for lightweight Render tiers.
     use_minilm = os.getenv("USE_MINILM", "true").lower().strip() not in ("0", "false", "no")
     if use_minilm:
         try:
@@ -71,7 +103,11 @@ def create_app() -> Flask:
     app.extensions["repo"] = repo
     app.extensions["categorizer"] = categorizer
     app.extensions["file_storage"] = file_storage
-    app.extensions["openai_service"] = GeminiService()
+    _gemini = GeminiService()
+    app.extensions["ai_service"] = _gemini
+    app.extensions["openai_service"] = _gemini  # backward-compatible alias
+    print("AI Service initialized:", app.extensions["ai_service"])
+    print("AI Service client is None:", getattr(app.extensions["ai_service"], "client", None) is None)
     # Bounded caches for hot paths (cleared implicitly on process restart / deploy).
     app.extensions["forecast_cache"] = {}
     app.extensions["forecast_cache_order"] = []
@@ -80,6 +116,7 @@ def create_app() -> Flask:
 
     app.register_blueprint(upload_bp, url_prefix="/upload")
     app.register_blueprint(analysis_bp)
+    app.register_blueprint(profile_bp)
     app.register_blueprint(chatbot_bp)
     app.register_blueprint(copilot_bp)
 

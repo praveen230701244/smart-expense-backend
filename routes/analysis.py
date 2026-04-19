@@ -1,6 +1,11 @@
+from typing import Any, Dict, List, Tuple
+
 from flask import Blueprint, current_app, g, jsonify
 
+from services.ai_advisor import generate_ai_advice
 from services.anomaly_service import detect_anomalies
+from services.budget_engine import analyze_budget
+from services.context_builder import build_context
 from services.insights_extended import mom_growth_headline, wasteful_spending_summary
 from services.insights_service import (
     category_breakdown,
@@ -59,10 +64,9 @@ def _build_top_insights(summary: dict, expenses: list) -> list[str]:
     return top_insights[:6]
 
 
-@analysis_bp.route("/expenses", methods=["GET"])
-def get_expenses():
+def _compute_full_summary(user_id: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """Shared /expenses + /analyze summary (existing fields unchanged)."""
     repo = current_app.extensions["repo"]
-    user_id = g.user_id
     expenses = repo.list_expenses(user_id)
     contamination = float(current_app.config.get("ANOMALY_CONTAMINATION", 0.08))
     fc_store = current_app.extensions.get("forecast_cache") or {}
@@ -118,8 +122,103 @@ def get_expenses():
             "anomalyCount": len(anomalies or []),
         },
     }
+    return expenses, summary
 
+
+@analysis_bp.route("/expenses", methods=["GET"])
+def get_expenses():
+    user_id = g.user_id
+    expenses, summary = _compute_full_summary(user_id)
     return jsonify({"status": "ok", "expenses": expenses, "summary": summary})
+
+
+@analysis_bp.route("/analyze", methods=["GET"])
+def analyze():
+    """
+    Same payload as /expenses plus profile_used, ai_advice, budget_analysis.
+    Safe when profile or AI is missing — always returns valid JSON.
+    """
+    user_id = g.user_id
+    try:
+        expenses, summary = _compute_full_summary(user_id)
+    except Exception:
+        expenses, summary = [], {}
+
+    repo = current_app.extensions["repo"]
+    profile_used = False
+    try:
+        profile_used = repo.get_user_profile(user_id) is not None
+    except Exception:
+        profile_used = False
+
+    contamination = float(current_app.config.get("ANOMALY_CONTAMINATION", 0.08))
+    context: dict = {}
+    try:
+        context = build_context(user_id, repo, contamination=contamination)
+    except Exception:
+        context = {
+            "mode": "basic",
+            "user_id": user_id,
+            "profile": None,
+            "expenses": expenses,
+            "category_breakdown": summary.get("categoryBreakdown") or [],
+            "categories": summary.get("categoryBreakdown") or [],
+            "total_expenses": float(summary.get("totalExpenses") or 0.0),
+            "total_expense": float(summary.get("totalExpenses") or 0.0),
+            "trends": summary.get("monthlyTrend") or [],
+            "goals": "unknown",
+            "risk": "unknown",
+        }
+
+    gemini = current_app.extensions.get("ai_service") or current_app.extensions.get("openai_service")
+    try:
+        ai_advice = generate_ai_advice(context, gemini=gemini, timeout_seconds=22.0)
+    except Exception as e:
+        print("analyze: generate_ai_advice failed:", repr(e))
+        fb = "Advice temporarily unavailable. Your expense summary is still shown above."
+        ai_advice = {
+            "advice": fb,
+            "source": "fallback",
+            "summary": fb,
+            "debug": {"error": repr(e)},
+        }
+
+    income_val = 0.0
+    fixed_val = 0.0
+    try:
+        prof = repo.get_user_profile(user_id) if profile_used else None
+        if prof:
+            income_val = float(prof.get("income") or prof.get("monthly_income") or 0.0)
+            fixed_val = float(prof.get("fixed_expenses") or 0.0)
+    except Exception:
+        income_val = 0.0
+        fixed_val = 0.0
+
+    try:
+        budget_analysis = analyze_budget(
+            income_val,
+            fixed_val,
+            expenses,
+            summary.get("categoryBreakdown") or [],
+        )
+    except Exception:
+        budget_analysis = {
+            "rule": "50-30-20",
+            "profile_required": not profile_used,
+            "error": "budget_unavailable",
+            "improvement_suggestions": ["Budget analysis temporarily unavailable."],
+        }
+
+    return jsonify(
+        {
+            "status": "ok",
+            "expenses": expenses,
+            "summary": summary,
+            "profile_used": profile_used,
+            "ai_advice": ai_advice,
+            "budget_analysis": budget_analysis,
+        }
+    )
 
 
 @analysis_bp.route("/insights", methods=["GET"])
